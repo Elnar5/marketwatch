@@ -17,10 +17,14 @@ inside ticker_feeds(). That's the whole job.
 from __future__ import annotations
 
 import concurrent.futures
+import socket
 from urllib.parse import quote_plus
 
 import feedparser
 from dateutil import parser as dateparser
+
+# Never let a slow/dead feed hang the whole app: cap every network read.
+socket.setdefaulttimeout(10)
 
 
 # ---------------------------------------------------------------------------
