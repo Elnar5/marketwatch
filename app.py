@@ -60,6 +60,11 @@ h1,h2,h3,.app-title{font-family:'Fraunces', serif!important; letter-spacing:-.01
   color:var(--cream); text-decoration:none; line-height:1.25; display:block;}
 .news-title:hover{color:var(--amber);}
 .news-sum{font-size:.95rem; color:#cfc4ad; line-height:1.5; margin:.45rem 0 .2rem;}
+.tk{display:inline-block; font-family:'JetBrains Mono',monospace; font-size:.6rem;
+  color:var(--ink); background:var(--amber); border-radius:5px; padding:.05rem .35rem;
+  margin-left:.25rem; letter-spacing:.05em; vertical-align:middle;}
+.imp{font-family:'JetBrains Mono',monospace; font-size:.62rem; color:var(--down);
+  font-weight:700; letter-spacing:.03em;}
 
 /* buttons */
 .stButton > button{
@@ -104,6 +109,13 @@ def load_news(tickers_tuple: tuple[str, ...], max_per_feed: int):
     return news_sources.fetch_all(list(tickers_tuple), max_per_feed=max_per_feed)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_scores(titles: tuple, watchlist: tuple, api_key: str, model: str):
+    """Cached impact + semantic-ticker scoring. Returns {index: {impact, tickers}}."""
+    rows = analysis.score_news(api_key, list(titles), list(watchlist), model)
+    return {r["i"]: r for r in rows}
+
+
 def humanize(dt):
     if dt is None:
         return "—"
@@ -140,26 +152,44 @@ st.markdown(
 with st.spinner("Pulling the wires…"):
     items = load_news(tuple(tickers), max_per_feed)
 
+# AI pass: impact score (0-10) + semantic ticker tags, then sort most-explosive first
+if api_key and items:
+    try:
+        with st.spinner("Ranking by impact…"):
+            scores = get_scores(tuple(it["title"] for it in items[:60]),
+                                tuple(tickers), api_key, model_name)
+        for i, it in enumerate(items):
+            row = scores.get(i, {})
+            it["impact"] = int(row.get("impact", 0))
+            it["tickers"] = sorted(set(it.get("tickers", [])) |
+                                   {t for t in row.get("tickers", []) if t})
+        items.sort(key=lambda it: it.get("impact", 0), reverse=True)
+    except Exception:  # noqa: BLE001  — fall back to keyword tags + date order
+        for it in items:
+            it.setdefault("impact", 0)
+
 tab_feed, tab_ticker, tab_paste = st.tabs(["📰 Feed", "🤖 Ticker", "📋 Paste"])
 
 
 # ------------------------- tab 1: feed ---------------------------------------
 with tab_feed:
+    # watchlist set -> only news relevant to it; watchlist empty -> everything
+    base = [it for it in items if set(it.get("tickers", [])) & set(tickers)] if tickers else items
     only = st.selectbox("Filter", ["All"] + tickers, label_visibility="collapsed")
-    shown = items
-    if only != "All":
-        shown = [it for it in shown if only in it["title"].upper()
-                 or f"[{only}]" in it["source"].upper()]
-    st.caption(f"{len(shown)} headlines · newest first")
+    shown = base if only == "All" else [it for it in base if only in it.get("tickers", [])]
+    st.caption(f"{len(shown)} headlines · most explosive first")
 
     for i, it in enumerate(shown):
         title = html.escape(it["title"])
         link = html.escape(it["link"] or "#")
         summ = html.escape(it["summary"]) if it["summary"] else ""
         src = html.escape(it["source"])
+        tags = "".join(f"<span class='tk'>{html.escape(t)}</span>" for t in it.get("tickers", []))
+        imp = it.get("impact", 0)
+        flame = f"<span class='imp'>🔥 {imp}</span> " if imp >= 7 else ""
         st.markdown(
             f"<div class='news-card'>"
-            f"<div class='news-meta'><span class='src'>{src}</span> · {humanize(it['dt'])}</div>"
+            f"<div class='news-meta'>{flame}<span class='src'>{src}</span> · {humanize(it['dt'])}{tags}</div>"
             f"<a class='news-title' href='{link}' target='_blank'>{title}</a>"
             f"{f'<p class=\"news-sum\">{summ}</p>' if summ else ''}"
             f"</div>", unsafe_allow_html=True)
@@ -188,8 +218,7 @@ with tab_ticker:
         if not api_key:
             st.error("Add your Gemini key in Settings.")
         else:
-            rel = ([it for it in items if tt in it["title"].upper()
-                    or f"[{tt}]" in it["source"].upper()] or items[:40]) if tt else items[:40]
+            rel = ([it for it in items if tt in it.get("tickers", [])] or items[:40]) if tt else items[:40]
             with st.spinner(f"Analyzing {target}…"):
                 try:
                     st.markdown(analysis.analyze(api_key, tt, rel, model_name))
