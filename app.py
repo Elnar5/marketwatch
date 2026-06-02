@@ -14,7 +14,7 @@ import news_sources
 import analysis
 
 
-st.set_page_config(page_title="MarketWatch · AI", page_icon="📈", layout="centered")
+st.set_page_config(page_title="MarketWatch", page_icon="icon.png", layout="centered")
 
 
 # ----------------------------- styling --------------------------------------
