@@ -194,11 +194,18 @@ with tab_feed:
         st.session_state.pop("scores", None)
         st.rerun()
 
-    # watchlist set -> only news relevant to it; watchlist empty -> everything
-    base = [it for it in items if set(it.get("tickers", [])) & set(tickers)] if tickers else items
+    # Before ranking we can't judge relevance semantically (that needs the API
+    # call), so show ALL news. After ranking, narrow to the watchlist.
+    if ranked and tickers:
+        base = [it for it in items if set(it.get("tickers", [])) & set(tickers)]
+    else:
+        base = items
     only = st.selectbox("Filter", ["All"] + tickers, label_visibility="collapsed")
     shown = base if only == "All" else [it for it in base if only in it.get("tickers", [])]
-    order = "most explosive first 🔥" if ranked else "newest first · tap Rank by impact to sort"
+    if ranked:
+        order = "most explosive first 🔥" + (" · your watchlist" if tickers else "")
+    else:
+        order = "newest first · tap Rank by impact to sort + filter to your watchlist"
     st.caption(f"{len(shown)} headlines · {order}")
 
     for i, it in enumerate(shown):
