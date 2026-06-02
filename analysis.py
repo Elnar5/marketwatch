@@ -34,16 +34,19 @@ Hard rules:
 # For single-news analysis we DO ask for a probability lean — but an honest one.
 SINGLE_INSTRUCTION = SYSTEM_INSTRUCTION + """
 
-You will be given ONE specific news item. Give a focused, detailed read of it,
-and you ARE allowed to state a probability/likelihood of the stock rising — but
-honestly:
-- Give a clear directional lean (more likely up / down / unclear) and a rough
-  confidence in WORDS (low / moderate / high), and you may give a rough % RANGE
-  (e.g. "maybe 55-65% lean to the upside short-term"), NOT a fake precise number.
-- Always justify the number with reasoning, and remind that it is a judgment from
-  public information, not a guarantee or real predictive edge.
-- If most of the move is likely already priced in, the honest lean may be DOWN or
-  flat even on good news."""
+You will be given ONE specific news item. Give a focused, detailed read of it.
+You ARE allowed to give a probability lean AND rough move-size ranges, but honestly:
+- Directional lean (up / down / unclear) + confidence in WORDS (low/moderate/high),
+  optionally a rough % range. Never a fake precise single number.
+- You may give rough PRICE-MOVE RANGES over a short horizon (~5 trading days) as
+  bull / base / bear SCENARIOS, each with the CONDITION that would cause it
+  (e.g. "Bull, if guidance is raised: +6 to +10%"). These are ILLUSTRATIVE
+  scenarios about the SIZE of possible moves — NOT predictions. Say plainly you
+  cannot actually predict the price; smart money sees the same news.
+- List READ-THROUGH tickers: other companies (peers, suppliers, customers) this
+  news could move, each with direction (up/down) and a one-line why.
+- If most of the move is likely already priced in, the honest lean may be down/flat
+  even on good news, and the scenario sizes should reflect that."""
 
 
 def _build_prompt(ticker: str, news_items: list[dict]) -> str:
@@ -97,15 +100,20 @@ def analyze_single(api_key: str, news_text: str, ticker: str = "",
 NEWS:
 \"\"\"{news_text}\"\"\"
 
-Cover:
+Cover, in this order:
 1. What this news actually says / means (plainly).
 2. Which company/stock it most affects, and why it matters.
 3. Is the move likely already priced in, or are expectations low? (expectations bar)
 4. Likely near-term effect on the stock, and any catalysts this sets up.
-5. PROBABILITY: your honest lean on whether the stock rises in the near term —
-   direction + confidence (low/moderate/high), optionally a rough % range, WITH
-   your reasoning. Be clear it's a judgment, not a guarantee.
-6. The single most important thing to watch next.
+5. READ-THROUGH — other companies this could move (peers / suppliers / customers):
+   for each, give TICKER, direction (up/down), and a one-line why. This is the
+   ripple effect to watch BEFORE those names report themselves.
+6. SCENARIOS over ~5 trading days (illustrative, NOT a prediction — you cannot
+   predict price): bull / base / bear, each with a rough % range AND the condition
+   that would trigger it.
+7. PROBABILITY: honest directional lean + confidence (low/moderate/high), with
+   reasoning. Remind that this is a judgment from public info, not a guarantee.
+8. The single most important thing to watch next.
 """
     response = client.models.generate_content(
         model=model_name,
