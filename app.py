@@ -134,27 +134,29 @@ def humanize(dt):
     return dt.strftime("%d %b %H:%M")
 
 
-# ----------------------------- sidebar ---------------------------------------
-with st.sidebar:
-    st.title("Settings")
-    api_key = st.text_input("Gemini API key", type="password",
-                            help="Free: aistudio.google.com/app/apikey")
-    model_name = st.text_input("Model", value="gemini-2.5-flash")
-    tickers_raw = st.text_input("Watchlist", value="MU, NVDA, AVGO")
-    max_per_feed = st.slider("Items per source", 10, 50, 25)
-    if st.button("Refresh news"):
-        load_news.clear()
-        st.session_state.pop("scores", None)
-
-tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
-
-
 # ----------------------------- header ----------------------------------------
 st.markdown(
     "<div class='app-head'>"
     "<div class='app-title'>Market<span class='dot'>.</span>Watch</div>"
     "<div class='app-tag'>News feed · AI read · not advice</div>"
     "</div>", unsafe_allow_html=True)
+
+# Settings live in the main page (not the sidebar) so they're always reachable on
+# mobile. Open by default until a key is entered, then it stays where you leave it.
+with st.expander("⚙️ Settings — Gemini key, watchlist",
+                 expanded=not st.session_state.get("api_key")):
+    api_key = st.text_input("Gemini API key", type="password",
+                            value=st.session_state.get("api_key", ""),
+                            help="Free: aistudio.google.com/app/apikey")
+    st.session_state["api_key"] = api_key
+    model_name = st.text_input("Model", value="gemini-2.5-flash")
+    tickers_raw = st.text_input("Watchlist (comma-separated)", value="MU, NVDA, AVGO")
+    max_per_feed = st.slider("Items per source", 10, 50, 25)
+    if st.button("🔄 Refresh news"):
+        load_news.clear()
+        st.session_state.pop("scores", None)
+
+tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
 
 with st.spinner("Pulling the wires…"):
     items = load_news(tuple(tickers), max_per_feed)
@@ -226,7 +228,7 @@ with tab_feed:
         rid = f"res::{it['link'] or it['title']}"
         if st.button("🔍 Analyze", key=f"b::{i}"):
             if not api_key:
-                st.session_state[rid] = "⚠️ Add your Gemini key in Settings (left)."
+                st.session_state[rid] = "⚠️ Add your Gemini key in ⚙️ Settings (top)."
             else:
                 with st.spinner("Reading the tea leaves…"):
                     try:
