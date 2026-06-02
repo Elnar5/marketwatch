@@ -36,8 +36,10 @@ SINGLE_INSTRUCTION = SYSTEM_INSTRUCTION + """
 
 You will be given ONE specific news item. Give a focused, detailed read of it.
 You ARE allowed to give a probability lean AND rough move-size ranges, but honestly:
-- Directional lean (up / down / unclear) + confidence in WORDS (low/moderate/high),
-  optionally a rough % range. Never a fake precise single number.
+- Express probability as NUMERIC % RANGES, never vague words. Give the chance of
+  UP vs DOWN over ~5 trading days as ranges, e.g. "Up: 60-70% / Down: 30-40%".
+  Do NOT use terms like "low/moderate/high confidence" or "slightly" on their own —
+  always attach numbers. A RANGE (not a single point) is what keeps it honest.
 - You may give rough PRICE-MOVE RANGES over a short horizon (~5 trading days) as
   bull / base / bear SCENARIOS, each with the CONDITION that would cause it
   (e.g. "Bull, if guidance is raised: +6 to +10%"). These are ILLUSTRATIVE
@@ -101,6 +103,11 @@ NEWS:
 \"\"\"{news_text}\"\"\"
 
 Cover, in this order:
+
+VERDICT (first line, one line, all numeric — no vague words): direction arrow +
+UP vs DOWN probability as % ranges over ~5 trading days + the bull/bear move sizes.
+Example: "↑ Lean up · Up 60-70% / Down 30-40% over ~5d · bull +6 to +10%, bear -8%".
+
 1. What this news actually says / means (plainly).
 2. Which company/stock it most affects, and why it matters.
 3. Is the move likely already priced in, or are expectations low? (expectations bar)
@@ -108,11 +115,11 @@ Cover, in this order:
 5. READ-THROUGH — other companies this could move (peers / suppliers / customers):
    for each, give TICKER, direction (up/down), and a one-line why. This is the
    ripple effect to watch BEFORE those names report themselves.
-6. SCENARIOS over ~5 trading days (illustrative, NOT a prediction — you cannot
-   predict price): bull / base / bear, each with a rough % range AND the condition
-   that would trigger it.
-7. PROBABILITY: honest directional lean + confidence (low/moderate/high), with
-   reasoning. Remind that this is a judgment from public info, not a guarantee.
+6. SCENARIOS over ~5 trading days (illustrative, NOT a prediction): bull / base /
+   bear, each with a numeric % range AND the condition that would trigger it.
+7. PROBABILITY: the UP vs DOWN chance as NUMERIC % RANGES over ~5 days
+   (e.g. "Up 60-70% / Down 30-40%") — NO vague words like "moderate". Then your
+   reasoning. Remind that this is an estimate, not a guarantee.
 8. The single most important thing to watch next.
 """
     response = client.models.generate_content(
