@@ -109,11 +109,17 @@ def load_news(tickers_tuple: tuple[str, ...], max_per_feed: int):
     return news_sources.fetch_all(list(tickers_tuple), max_per_feed=max_per_feed)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_scores(titles: tuple, watchlist: tuple, api_key: str, model: str):
-    """Cached impact + semantic-ticker scoring. Returns {index: {impact, tickers}}."""
+    """Cached impact + semantic-ticker scoring. Returns {title: {impact, tickers}}."""
     rows = analysis.score_news(api_key, list(titles), list(watchlist), model)
-    return {r["i"]: r for r in rows}
+    tl = list(titles)
+    out = {}
+    for r in rows:
+        i = r.get("i")
+        if isinstance(i, int) and 0 <= i < len(tl):
+            out[tl[i]] = {"impact": int(r.get("impact", 0)), "tickers": r.get("tickers", [])}
+    return out
 
 
 def humanize(dt):
@@ -138,6 +144,7 @@ with st.sidebar:
     max_per_feed = st.slider("Items per source", 10, 50, 25)
     if st.button("Refresh news"):
         load_news.clear()
+        st.session_state.pop("scores", None)
 
 tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
 
@@ -152,32 +159,47 @@ st.markdown(
 with st.spinner("Pulling the wires…"):
     items = load_news(tuple(tickers), max_per_feed)
 
-# AI pass: impact score (0-10) + semantic ticker tags, then sort most-explosive first
-if api_key and items:
-    try:
-        with st.spinner("Ranking by impact…"):
-            scores = get_scores(tuple(it["title"] for it in items[:60]),
-                                tuple(tickers), api_key, model_name)
-        for i, it in enumerate(items):
-            row = scores.get(i, {})
-            it["impact"] = int(row.get("impact", 0))
-            it["tickers"] = sorted(set(it.get("tickers", [])) |
-                                   {t for t in row.get("tickers", []) if t})
-        items.sort(key=lambda it: it.get("impact", 0), reverse=True)
-    except Exception:  # noqa: BLE001  — fall back to keyword tags + date order
-        for it in items:
-            it.setdefault("impact", 0)
+# Apply previously-computed impact scores if present. This costs NO API call —
+# scoring only runs when you tap "Rank by impact" (see the Feed tab).
+_scores = st.session_state.get("scores") or {}
+for it in items:
+    row = _scores.get(it["title"])
+    if row:
+        it["impact"] = int(row.get("impact", 0))
+        it["tickers"] = sorted(set(it.get("tickers", [])) | {t for t in row.get("tickers", []) if t})
+    else:
+        it.setdefault("impact", 0)
+if _scores:
+    items.sort(key=lambda it: it.get("impact", 0), reverse=True)
 
 tab_feed, tab_ticker, tab_paste = st.tabs(["📰 Feed", "🤖 Ticker", "📋 Paste"])
 
 
 # ------------------------- tab 1: feed ---------------------------------------
 with tab_feed:
+    ranked = bool(st.session_state.get("scores"))
+    cols = st.columns([1, 1])
+    if cols[0].button("🔥 Rank by impact" + (" ✓" if ranked else " (1 request)")):
+        if not api_key:
+            st.warning("Add your Gemini key in Settings first.")
+        else:
+            with st.spinner("Reading every headline & ranking…"):
+                try:
+                    st.session_state["scores"] = get_scores(
+                        tuple(it["title"] for it in items[:60]), tuple(tickers), api_key, model_name)
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Failed: {exc}")
+    if ranked and cols[1].button("↺ Clear ranking"):
+        st.session_state.pop("scores", None)
+        st.rerun()
+
     # watchlist set -> only news relevant to it; watchlist empty -> everything
     base = [it for it in items if set(it.get("tickers", [])) & set(tickers)] if tickers else items
     only = st.selectbox("Filter", ["All"] + tickers, label_visibility="collapsed")
     shown = base if only == "All" else [it for it in base if only in it.get("tickers", [])]
-    st.caption(f"{len(shown)} headlines · most explosive first")
+    order = "most explosive first 🔥" if ranked else "newest first · tap Rank by impact to sort"
+    st.caption(f"{len(shown)} headlines · {order}")
 
     for i, it in enumerate(shown):
         title = html.escape(it["title"])
