@@ -113,3 +113,43 @@ Cover:
         config=types.GenerateContentConfig(system_instruction=SINGLE_INSTRUCTION),
     )
     return response.text
+
+
+def score_news(api_key: str, titles: list[str], watchlist: list[str],
+               model_name: str = "gemini-2.5-flash") -> list[dict]:
+    """One cheap call: for each headline return impact (0-10) + which watchlist
+    tickers it affects directly OR indirectly. Returns [{"i","impact","tickers"}]."""
+    import json
+    client = genai.Client(api_key=api_key)
+    wl = ", ".join(watchlist) if watchlist else "(empty — leave tickers [])"
+    listing = "\n".join(f"{i}: {t}" for i, t in enumerate(titles[:60]))
+    prompt = f"""Watchlist tickers: {wl}
+
+For EACH headline below decide:
+- "impact": integer 0-10 = how market-moving / explosive it is (10 = could move a
+  stock sharply today; 3-5 = normal; 0 = noise/duplicate).
+- "tickers": which of the watchlist tickers this news could affect DIRECTLY OR
+  INDIRECTLY. Indirect counts: e.g. "AI memory demand surges" affects MU/NVDA even
+  if unnamed; "rate cut" affects rate-sensitive names. Use ONLY tickers from the
+  watchlist above. If watchlist is empty, return [].
+
+Return ONLY a JSON array, no prose:
+[{{"i":0,"impact":7,"tickers":["NVDA"]}}, ...]
+
+Headlines:
+{listing}"""
+    resp = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    data = json.loads(resp.text)
+    out = []
+    for d in data:
+        if isinstance(d, dict) and "i" in d:
+            out.append({
+                "i": int(d["i"]),
+                "impact": int(d.get("impact", 0)),
+                "tickers": [str(t).upper() for t in (d.get("tickers") or [])],
+            })
+    return out
