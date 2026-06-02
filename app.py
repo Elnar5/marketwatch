@@ -196,18 +196,23 @@ with tab_feed:
         st.session_state.pop("scores", None)
         st.rerun()
 
-    # Before ranking we can't judge relevance semantically (that needs the API
-    # call), so show ALL news. After ranking, narrow to the watchlist.
-    if ranked and tickers:
-        base = [it for it in items if set(it.get("tickers", [])) & set(tickers)]
+    # If a watchlist is set, show only news relevant to it (by ticker/company-name
+    # tags) — works WITHOUT spending an API call. If that finds nothing (rare),
+    # fall back to all news so the feed is never empty. Ranking later adds the
+    # semantic (indirect) matches + impact ordering.
+    if tickers:
+        relevant = [it for it in items if set(it.get("tickers", [])) & set(tickers)]
+        base = relevant if relevant else items
     else:
         base = items
     only = st.selectbox("Filter", ["All"] + tickers, label_visibility="collapsed")
     shown = base if only == "All" else [it for it in base if only in it.get("tickers", [])]
     if ranked:
         order = "most explosive first 🔥" + (" · your watchlist" if tickers else "")
+    elif tickers:
+        order = "your watchlist · newest first · tap Rank by impact for impact + indirect"
     else:
-        order = "newest first · tap Rank by impact to sort + filter to your watchlist"
+        order = "newest first · tap Rank by impact to sort"
     st.caption(f"{len(shown)} headlines · {order}")
 
     for i, it in enumerate(shown):
