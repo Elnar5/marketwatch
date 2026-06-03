@@ -70,6 +70,7 @@ def compute_rankings(closes: dict[str, dict[str, float]], top_n: int = 10) -> tu
 
     ranked_dates = sorted(rankings.keys())
     topsets = {d: {e["ticker"] for e in rankings[d]} for d in ranked_dates}
+    idx_in_trading = {d: i for i, d in enumerate(trading)}
     for idx, d in enumerate(ranked_dates):
         for e in rankings[d]:
             run, k = 1, idx - 1
@@ -79,4 +80,40 @@ def compute_rankings(closes: dict[str, dict[str, float]], top_n: int = 10) -> tu
             e["days_in_top"] = run
             e["stayed_next"] = (e["ticker"] in topsets[ranked_dates[idx + 1]]
                                 if idx + 1 < len(ranked_dates) else None)
+            # forward returns from this day's close (next up-to-3 trading days)
+            base, ti, fwd = e["close"], idx_in_trading[d], []
+            for kk in (1, 2, 3):
+                if ti + kk < len(trading):
+                    fd = trading[ti + kk]
+                    fc = closes[fd].get(e["ticker"])
+                    if fc:
+                        fwd.append((fd, (fc - base) / base * 100.0))
+            e["fwd"] = fwd
     return ranked_dates, rankings
+
+
+def ticker_news(api_key: str, ticker: str, date_str: str,
+                window_days: int = 4, limit: int = 20) -> list[str]:
+    """Headlines for `ticker` published around `date_str` (YYYY-MM-DD), via Polygon's
+    news endpoint. Returns ['[YYYY-MM-DD] title', ...]. Empty if none / not on tier /
+    tiny stock with no coverage (which itself usually means a no-news pump)."""
+    from datetime import date as _d, timedelta as _td
+    d = _d.fromisoformat(date_str)
+    lo = (d - _td(days=window_days)).isoformat()
+    hi = (d + _td(days=window_days)).isoformat()
+    url = f"{BASE}/v2/reference/news"
+    params = {"ticker": ticker, "published_utc.gte": lo, "published_utc.lte": hi,
+              "order": "desc", "limit": limit, "apiKey": api_key}
+    try:
+        r = requests.get(url, params=params, timeout=20)
+        r.raise_for_status()
+        arts = r.json().get("results") or []
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] ticker_news failed: {exc}")
+        return []
+    out = []
+    for a in arts:
+        t = a.get("title")
+        if t:
+            out.append(f"[{(a.get('published_utc') or '')[:10]}] {t}")
+    return out
