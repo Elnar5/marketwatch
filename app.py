@@ -12,6 +12,7 @@ import streamlit as st
 
 import news_sources
 import analysis
+import gainers
 
 
 st.set_page_config(page_title="MarketWatch", page_icon="icon.png", layout="centered")
@@ -122,6 +123,11 @@ def get_scores(titles: tuple, watchlist: tuple, api_key: str, model: str):
     return out
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def load_gainers(count: int):
+    return gainers.fetch_gainers(count)
+
+
 def humanize(dt):
     if dt is None:
         return "—"
@@ -174,7 +180,8 @@ for it in items:
 if _scores:
     items.sort(key=lambda it: it.get("impact", 0), reverse=True)
 
-tab_feed, tab_ticker, tab_paste = st.tabs(["📰 Feed", "🤖 Ticker", "📋 Paste"])
+tab_feed, tab_gainers, tab_ticker, tab_paste = st.tabs(
+    ["📰 Feed", "🚀 Gainers", "🤖 Ticker", "📋 Paste"])
 
 
 # ------------------------- tab 1: feed ---------------------------------------
@@ -243,6 +250,42 @@ with tab_feed:
                         st.session_state[rid] = f"Gemini failed: {exc}"
         if st.session_state.get(rid):
             with st.expander("AI analysis", expanded=True):
+                st.markdown(st.session_state[rid])
+
+
+# ------------------------- tab: gainers --------------------------------------
+with tab_gainers:
+    st.caption("Today's biggest gainers across the US market. ⚠️ Chasing these is "
+               "high-risk — most extreme daily gainers pull back. Read each one first.")
+    gl = load_gainers(40)
+    if not gl:
+        st.warning("Couldn't load gainers right now — the data source may be blocking "
+                   "the server. Tell Claude and we'll switch to another source.")
+    for i, g in enumerate(gl):
+        st.markdown(
+            f"<div class='news-card'>"
+            f"<div class='news-meta'>"
+            f"<span style='color:var(--up);font-weight:700'>+{g['pct']:.1f}%</span> "
+            f"<span class='src'>{html.escape(g['ticker'])}</span> · ${g['price']:.2f}</div>"
+            f"<div class='news-title' style='font-size:1rem'>{html.escape(g['name'])}</div>"
+            f"</div>", unsafe_allow_html=True)
+        rid = f"gain::{g['ticker']}"
+        if st.button("Why is it up? ✨", key=f"g::{i}"):
+            if not api_key:
+                st.session_state[rid] = "⚠️ Add your Gemini key in ⚙️ Settings (top)."
+            else:
+                with st.spinner(f"Reading {g['ticker']}…"):
+                    try:
+                        feeds = news_sources.ticker_feeds(g["ticker"])
+                        name, url = list(feeds.items())[0]   # Google News [TICKER]
+                        heads = [it["title"] for it in
+                                 news_sources.fetch_feed(name, url, g["ticker"], 10)]
+                        st.session_state[rid] = analysis.analyze_gainer(
+                            api_key, g["ticker"], g["name"], g["pct"], heads, model_name)
+                    except Exception as exc:  # noqa: BLE001
+                        st.session_state[rid] = f"Failed: {exc}"
+        if st.session_state.get(rid):
+            with st.expander("Why + persistence read", expanded=True):
                 st.markdown(st.session_state[rid])
 
 
