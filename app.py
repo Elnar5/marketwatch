@@ -6,13 +6,14 @@ Run:  streamlit run app.py
 from __future__ import annotations
 
 import html
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 
 import streamlit as st
 
 import news_sources
 import analysis
 import gainers
+import polygon_data
 
 
 st.set_page_config(page_title="MarketWatch", page_icon="icon.png", layout="centered")
@@ -128,6 +129,19 @@ def load_gainers(count: int):
     return gainers.fetch_gainers(count)
 
 
+@st.cache_data(show_spinner=False)
+def bt_fetch(poly_key: str, dates: tuple, pace: float = 12.5):
+    return polygon_data.fetch_range(poly_key, list(dates), pace_seconds=pace)
+
+
+def bt_calendar(s: date, e: date) -> list[str]:
+    cur, out = s - timedelta(days=5), []   # pad for prior close
+    while cur <= e:
+        out.append(cur.isoformat())
+        cur += timedelta(days=1)
+    return out
+
+
 def humanize(dt):
     if dt is None:
         return "—"
@@ -157,6 +171,9 @@ with st.expander("⚙️ Settings — Gemini key, watchlist",
     st.session_state["api_key"] = api_key
     model_name = st.text_input("Model", value="gemini-2.5-flash")
     tickers_raw = st.text_input("Watchlist (comma-separated)", value="MU, NVDA, AVGO")
+    poly_key = st.text_input("Polygon API key (for 🔬 Backtest — free: polygon.io)",
+                             type="password", value=st.session_state.get("poly_key", ""))
+    st.session_state["poly_key"] = poly_key
     max_per_feed = st.slider("Items per source", 10, 50, 25)
     if st.button("🔄 Refresh news"):
         load_news.clear()
@@ -180,8 +197,8 @@ for it in items:
 if _scores:
     items.sort(key=lambda it: it.get("impact", 0), reverse=True)
 
-tab_feed, tab_gainers, tab_ticker, tab_paste = st.tabs(
-    ["📰 Feed", "🚀 Gainers", "🤖 Ticker", "📋 Paste"])
+tab_feed, tab_gainers, tab_backtest, tab_ticker, tab_paste = st.tabs(
+    ["📰 Feed", "🚀 Gainers", "🔬 Backtest", "🤖 Ticker", "📋 Paste"])
 
 
 # ------------------------- tab 1: feed ---------------------------------------
@@ -287,6 +304,76 @@ with tab_gainers:
         if st.session_state.get(rid):
             with st.expander("Why + persistence read", expanded=True):
                 st.markdown(st.session_state[rid])
+
+
+# ------------------------- tab: backtest -------------------------------------
+with tab_backtest:
+    st.caption("Pick a past date → that day's REAL top gainers → why → did they stay? "
+               "Price facts (top-N, days-in-top, next-day) are exact. ⏳ First build "
+               "takes ~4-5 min (Polygon 5/min free limit), then it's cached.")
+    cc1, cc2 = st.columns(2)
+    bt_start = cc1.date_input("From", value=date.today() - timedelta(days=21), key="bts")
+    bt_end = cc2.date_input("To", value=date.today() - timedelta(days=1), key="bte")
+    bt_n = st.slider("Top N", 5, 20, 10, key="btn_n")
+
+    if st.button("📊 Build rankings", type="primary"):
+        if not poly_key:
+            st.error("Add your Polygon key in ⚙️ Settings (top).")
+        elif bt_start >= bt_end:
+            st.error("'From' must be before 'To'.")
+        else:
+            dts = bt_calendar(bt_start, bt_end)
+            with st.spinner(f"Fetching ~{len(dts)} days from Polygon "
+                            f"(~{len(dts)*12//60}+ min first time, then cached)…"):
+                try:
+                    closes = bt_fetch(poly_key, tuple(dts))
+                    rd, rk = polygon_data.compute_rankings(closes, bt_n)
+                    rd = [d for d in rd if bt_start.isoformat() <= d <= bt_end.isoformat()]
+                    st.session_state["bt"] = {"dates": rd, "rk": rk}
+                    st.success(f"Done — {len(rd)} trading days ranked.")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Failed: {exc}")
+
+    bt = st.session_state.get("bt")
+    if bt and bt["dates"]:
+        sel = st.selectbox("Date", bt["dates"][::-1], key="bt_sel")
+        rows = bt["rk"][sel]
+        st.markdown(f"#### Top {len(rows)} — {sel}")
+        for i, e in enumerate(rows):
+            nxt = e.get("stayed_next")
+            tag = ("✅ stayed" if nxt else ("❌ dropped" if nxt is False else "— last day"))
+            st.markdown(
+                f"**{i+1}. {e['ticker']}** · +{e['pct']:.1f}% · ${e['close']:.2f}  \n"
+                f"🔥 {e['days_in_top']}d in top {len(rows)} · next day: {tag}")
+            rid = f"bt::{sel}::{e['ticker']}"
+            if st.button(f"Analyze {e['ticker']} ✨", key=f"bta::{i}"):
+                if not api_key:
+                    st.session_state[rid] = "⚠️ Add your Gemini key in ⚙️ Settings."
+                else:
+                    with st.spinner(f"Analysing {e['ticker']}…"):
+                        try:
+                            feeds = news_sources.ticker_feeds(e["ticker"])
+                            nm, url = list(feeds.items())[0]
+                            heads = [it["title"] for it in
+                                     news_sources.fetch_feed(nm, url, e["ticker"], 10)]
+                            st.session_state[rid] = analysis.analyze_gainer(
+                                api_key, e["ticker"], e["ticker"], e["pct"], heads, model_name)
+                        except Exception as exc:  # noqa: BLE001
+                            st.session_state[rid] = f"Failed: {exc}"
+            if st.session_state.get(rid):
+                with st.expander(f"{e['ticker']} — reasons + persistence", expanded=True):
+                    st.caption(f"⚠️ Headlines are CURRENT, not from {sel}. For old dates "
+                               "the LLM reasons from general knowledge.")
+                    st.markdown(st.session_state[rid])
+            st.divider()
+
+        stayed = sum(1 for d in bt["dates"] for e in bt["rk"][d]
+                     if e.get("stayed_next") is True)
+        total = sum(1 for d in bt["dates"] for e in bt["rk"][d]
+                    if e.get("stayed_next") is not None)
+        if total:
+            st.info(f"This range: **{stayed}/{total} ({stayed/total*100:.0f}%)** of "
+                    f"top-{bt_n} gainers stayed in the top-{bt_n} the next day.")
 
 
 # ------------------------- tab 2: ticker -------------------------------------
