@@ -168,3 +168,31 @@ Headlines:
                 "tickers": [str(t).upper() for t in (d.get("tickers") or [])],
             })
     return out
+
+
+def analyze_gainer(api_key: str, ticker: str, name: str, pct: float,
+                   headlines: list[str], model_name: str = "gemini-2.5-flash") -> str:
+    """Explain why a top gainer is up + an HONEST persistence read (numeric ranges)."""
+    client = genai.Client(api_key=api_key)
+    hl = "\n".join(f"- {h}" for h in headlines[:15]) or "(no recent headlines found)"
+    prompt = f"""{name} ({ticker}) is up {pct:.1f}% today and is among the day's top gainers.
+Recent headlines for it:
+{hl}
+
+In short prose:
+1. The most likely REASON it is up today (use the headlines; if unclear, say so).
+2. Catalyst TYPE: is this the PERSISTING kind (earnings/guidance beat, M&A, durable
+   structural news) or the REVERSING kind (short squeeze, low-float pop, pump, one-off
+   hype)? Say which.
+3. PERSISTENCE — honest numeric lean over the next few days: "stays strong: X% /
+   pulls back: Y%". Remember the base rate: extreme single-day gainers MOSTLY
+   mean-revert; only some catalysts (e.g. earnings drift) tend to persist. So unless
+   the catalyst is the persisting kind, lean toward pull-back.
+4. RISK (one line): chasing the day's top gainers is high-risk (squeeze / pump /
+   gap-down danger). Be blunt."""
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(system_instruction=SINGLE_INSTRUCTION),
+    )
+    return response.text
