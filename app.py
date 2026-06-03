@@ -135,8 +135,8 @@ def bt_fetch(poly_key: str, dates: tuple, pace: float = 12.5):
 
 
 def bt_calendar(s: date, e: date) -> list[str]:
-    cur, out = s - timedelta(days=5), []   # pad for prior close
-    while cur <= e:
+    cur, out = s - timedelta(days=5), []   # pad back for prior close,
+    while cur <= e + timedelta(days=6):    # pad forward for 3-day pattern
         out.append(cur.isoformat())
         cur += timedelta(days=1)
     return out
@@ -345,25 +345,26 @@ with tab_backtest:
             st.markdown(
                 f"**{i+1}. {e['ticker']}** · +{e['pct']:.1f}% · ${e['close']:.2f}  \n"
                 f"🔥 {e['days_in_top']}d in top {len(rows)} · next day: {tag}")
+            fwd = e.get("fwd") or []
+            if fwd:
+                fwd_txt = " · ".join(f"+{j}d {p:+.0f}%" for j, (_, p) in enumerate(fwd, 1))
+                st.caption(f"from this day's close → {fwd_txt}")
             rid = f"bt::{sel}::{e['ticker']}"
             if st.button(f"Analyze {e['ticker']} ✨", key=f"bta::{i}"):
                 if not api_key:
                     st.session_state[rid] = "⚠️ Add your Gemini key in ⚙️ Settings."
                 else:
-                    with st.spinner(f"Analysing {e['ticker']}…"):
+                    with st.spinner(f"Analysing {e['ticker']} (news around {sel})…"):
                         try:
-                            feeds = news_sources.ticker_feeds(e["ticker"])
-                            nm, url = list(feeds.items())[0]
-                            heads = [it["title"] for it in
-                                     news_sources.fetch_feed(nm, url, e["ticker"], 10)]
+                            heads = polygon_data.ticker_news(poly_key, e["ticker"], sel)
                             st.session_state[rid] = analysis.analyze_gainer(
                                 api_key, e["ticker"], e["ticker"], e["pct"], heads, model_name)
                         except Exception as exc:  # noqa: BLE001
                             st.session_state[rid] = f"Failed: {exc}"
             if st.session_state.get(rid):
                 with st.expander(f"{e['ticker']} — reasons + persistence", expanded=True):
-                    st.caption(f"⚠️ Headlines are CURRENT, not from {sel}. For old dates "
-                               "the LLM reasons from general knowledge.")
+                    st.caption(f"News pulled from around {sel} (Polygon). Empty = no "
+                               "coverage for that date (often itself a no-news pump).")
                     st.markdown(st.session_state[rid])
             st.divider()
 
