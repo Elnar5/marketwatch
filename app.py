@@ -135,8 +135,10 @@ def bt_fetch(poly_key: str, dates: tuple, pace: float = 12.5):
 
 
 def bt_calendar(s: date, e: date) -> list[str]:
-    cur, out = s - timedelta(days=5), []   # pad back for prior close,
-    while cur <= e + timedelta(days=6):    # pad forward for 3-day pattern
+    # never request today/future — free tier forbids today before EOD
+    last = min(e + timedelta(days=6), date.today() - timedelta(days=1))
+    cur, out = s - timedelta(days=5), []   # pad back for prior close
+    while cur <= last:
         out.append(cur.isoformat())
         cur += timedelta(days=1)
     return out
@@ -330,7 +332,12 @@ with tab_backtest:
                     rd, rk = polygon_data.compute_rankings(closes, bt_n)
                     rd = [d for d in rd if bt_start.isoformat() <= d <= bt_end.isoformat()]
                     st.session_state["bt"] = {"dates": rd, "rk": rk}
-                    st.success(f"Done — {len(rd)} trading days ranked.")
+                    if rd:
+                        st.success(f"Done — {len(rd)} trading days ranked.")
+                    else:
+                        st.warning("No trading days returned. Check your Polygon key, or "
+                                   "pick an older / wider range (today isn't available "
+                                   "on the free tier until after market close).")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Failed: {exc}")
 
