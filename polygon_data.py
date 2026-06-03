@@ -39,9 +39,16 @@ def fetch_range(api_key: str, dates: list[str], pace_seconds: float = 12.5,
     for i, d in enumerate(dates):
         try:
             g = grouped_daily(api_key, d)
-        except RuntimeError:
-            time.sleep(pace_seconds * 2)   # backoff on rate limit, retry once
-            g = grouped_daily(api_key, d)
+        except RuntimeError:                       # rate limited → backoff + retry
+            time.sleep(pace_seconds * 2)
+            try:
+                g = grouped_daily(api_key, d)
+            except Exception as exc:               # noqa: BLE001
+                print(f"[warn] skip {d}: {exc}")
+                g = {}
+        except Exception as exc:                   # 403 today/future, etc → skip date
+            print(f"[warn] skip {d}: {exc}")
+            g = {}
         if g:
             closes[d] = g
         if on_progress:
