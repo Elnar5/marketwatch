@@ -199,8 +199,8 @@ for it in items:
 if _scores:
     items.sort(key=lambda it: it.get("impact", 0), reverse=True)
 
-tab_feed, tab_gainers, tab_backtest, tab_ticker, tab_paste = st.tabs(
-    ["📰 Feed", "🚀 Gainers", "🔬 Backtest", "🤖 Ticker", "📋 Paste"])
+tab_feed, tab_gainers, tab_backtest, tab_calc, tab_ticker, tab_paste = st.tabs(
+    ["📰 Feed", "🚀 Gainers", "🔬 Backtest", "💰 Calc", "🤖 Ticker", "📋 Paste"])
 
 
 # ------------------------- tab 1: feed ---------------------------------------
@@ -382,6 +382,54 @@ with tab_backtest:
         if total:
             st.info(f"This range: **{stayed}/{total} ({stayed/total*100:.0f}%)** of "
                     f"top-{bt_n} gainers stayed in the top-{bt_n} the next day.")
+
+
+# ------------------------- tab: calc -----------------------------------------
+with tab_calc:
+    st.caption("Net profit calculator — counts FX spread (both ways) + commissions, "
+               "so you see the REAL % you keep, not the gross. (The currency rate "
+               "itself cancels out — only the spread + fees eat your gain.)")
+
+    c1, c2 = st.columns(2)
+    buy_price = c1.number_input("Buy price / share ($)", min_value=0.0, value=200.0, step=1.0)
+    amount_azn = c2.number_input("Amount invested (AZN)", min_value=0.0, value=1200.0, step=50.0)
+    target = st.select_slider("Target NET profit (%)",
+                              options=[1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20], value=3)
+
+    with st.expander("⚙️ Cost settings (match your broker)"):
+        fx = st.number_input("FX spread each way (%)", min_value=0.0, value=0.7, step=0.1,
+                             help="Birbank ~0.7% each way. You paid ~1.2% last time — adjust.")
+        comm = st.number_input("Commission per trade (%)", min_value=0.0, value=0.2, step=0.1)
+
+    f, c, T = fx / 100, comm / 100, target / 100
+    # gross stock gain needed so that, after all costs, you NET T%
+    g = (1 + T) * (1 + f) / ((1 - c) * (1 - c) * (1 - f)) - 1
+    target_price = buy_price * (1 + g)
+    net_azn = amount_azn * T
+    drag = g * 100 - target  # how much the costs add on top
+
+    st.markdown(f"### To NET **{target}%** (≈ **{net_azn:.0f} AZN**)")
+    st.markdown(f"- The stock must rise **{g*100:.2f}%** (gross)")
+    st.markdown(f"- Sell target: **${target_price:.2f}**  (from ${buy_price:.2f})")
+    st.caption(f"That {g*100:.2f}% gross vs {target}% net — the extra **{drag:.2f}%** is "
+               f"eaten by FX spread + commissions (both ways). On small moves this is huge.")
+
+    st.divider()
+    st.markdown("**↩︎ Reverse — what did I ACTUALLY net?**")
+    sell_price = st.number_input("Actual sell price ($)", min_value=0.0, value=206.0, step=1.0)
+    if buy_price > 0 and sell_price > 0:
+        g_act = sell_price / buy_price - 1
+        net_frac = (1 - c) * (1 - c) * (1 - f) * (1 + g_act) / (1 + f) - 1
+        color = "var(--up)" if net_frac >= 0 else "var(--down)"
+        st.markdown(
+            f"Stock moved **{g_act*100:.2f}%** → you actually NET "
+            f"<span style='color:{color};font-weight:700'>{net_frac*100:.2f}%</span> "
+            f"(≈ **{amount_azn*net_frac:.0f} AZN**)", unsafe_allow_html=True)
+        if net_frac < 0:
+            st.warning("Net is negative — costs swallowed the gain. Need a bigger move.")
+        else:
+            st.caption(f"Gross {g_act*100:.2f}% but net {net_frac*100:.2f}% — that gap is "
+                       "exactly why a '3% win' can really be ~1%.")
 
 
 # ------------------------- tab 2: ticker -------------------------------------
