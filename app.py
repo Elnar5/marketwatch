@@ -386,74 +386,80 @@ with tab_backtest:
 
 # ------------------------- tab: calc -----------------------------------------
 with tab_calc:
-    st.caption("Net profit calculator — uses your REAL ABB/Birbank rates + the 0.40% "
-               "commission (both ways) and shows the true % you keep. The FX cost is "
-               "derived automatically from the buy/sell rates.")
+    st.caption("Exact net calculator — real ABB/Birbank rates + 0.40% commission, every "
+               "step shown so it matches your broker. 'Current value' = what the broker "
+               "shows (unrealized). 'Net' = what you keep after the sell fee (+ FX if you "
+               "convert back to AZN).")
 
+    cur = st.radio("Money invested in:", ["USD", "AZN"], horizontal=True,
+                   help="USD = funds already in dollars. AZN = converted from manat at the buy rate.")
     c1, c2 = st.columns(2)
-    buy_price = c1.number_input("Buy price / share ($)", min_value=0.01, value=200.0, step=1.0)
-    amount_azn = c2.number_input("Amount invested (AZN)", min_value=1.0, value=1200.0, step=50.0)
-    target = st.select_slider("Target NET profit (%)",
-                              options=[1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20], value=3)
+    amount = c1.number_input(f"Amount invested ({cur})", min_value=0.0, value=300.0, step=10.0)
+    buy_price = c2.number_input("Buy price / share ($)", min_value=0.01, value=941.98, step=1.0)
+    sell_price = st.number_input("Current / sell price ($)", min_value=0.0, value=987.0, step=1.0)
 
-    with st.expander("⚙️ Rates & commission (your ABB / Birbank numbers)"):
-        rate_buy = st.number_input("AZN→USD rate (you pay buying $)", value=1.7190,
-                                   step=0.0001, format="%.4f")
-        rate_sell = st.number_input("USD→AZN rate (you get selling $)", value=1.6965,
-                                    step=0.0001, format="%.4f")
+    with st.expander("⚙️ Rates, commission & options"):
+        rate_buy = st.number_input("AZN→USD (buying $)", value=1.7190, step=0.0001, format="%.4f")
+        rate_sell = st.number_input("USD→AZN (selling $)", value=1.6965, step=0.0001, format="%.4f")
         comm_pct = st.number_input("Commission per trade (%)", value=0.40, step=0.05) / 100
         cc1, cc2 = st.columns(2)
-        comm_min = cc1.number_input("Min commission ($)", value=1.0, step=0.5)
-        comm_max = cc2.number_input("Max commission ($)", value=100.0, step=10.0)
-
-    fx_legs = st.radio(
-        "Currency conversions to count",
-        options=[2, 1, 0],
-        format_func=lambda n: {
-            2: "Round trip: AZN→USD→trade→USD→AZN  (pay FX twice)",
-            1: "One way: convert once, keep the rest in USD  (FX once)",
-            0: "Already in USD, stays in USD  (no FX, only commission)",
-        }[n], index=0,
-        help="If you keep money in USD and don't cash out to AZN, FX is paid fewer times.")
+        comm_min = cc1.number_input("Min ($)", value=1.0, step=0.5)
+        comm_max = cc2.number_input("Max ($)", value=100.0, step=10.0)
+        if cur == "USD":
+            cash_out = st.checkbox("Convert final USD back to AZN (adds USD→AZN spread)",
+                                   value=False)
+        else:
+            cash_out = True
+            st.caption("AZN entry → profit measured in AZN (converted back at the sell rate).")
 
     def comm_usd(v):
-        return min(max(v * comm_pct, comm_min), comm_max)
+        return min(max(v * comm_pct, comm_min), comm_max) if v > 0 else 0.0
 
-    ratio = rate_sell / rate_buy
-    fx_factor = {2: ratio, 1: ratio ** 0.5, 0: 1.0}[fx_legs]
-    fx_cost = (1 - fx_factor) * 100                 # FX cost for chosen legs
-    unit = "AZN" if fx_legs == 2 else "USD"
-    usd_avail = amount_azn / rate_buy if fx_legs >= 1 else amount_azn
-    c_eff = comm_usd(usd_avail) / usd_avail         # effective comm rate (respects min/max)
-    T = target / 100
+    funded_usd = amount if cur == "USD" else (amount / rate_buy if rate_buy else 0.0)
+    final_azn = (cur == "AZN") or cash_out
+    fcur = "AZN" if final_azn else "USD"
 
-    g = (1 + T) / (fx_factor * (1 - c_eff) ** 2) - 1   # gross rise to NET target
-    target_price = buy_price * (1 + g)
-    net_amt = amount_azn * T
-    friction = g * 100 - target
+    if buy_price > 0 and funded_usd > 0 and sell_price > 0:
+        buy_comm = comm_usd(funded_usd)
+        shares = funded_usd / buy_price
+        cost_usd = funded_usd + buy_comm
+        cur_val = shares * sell_price                       # unrealized — broker shows this
+        sell_comm = comm_usd(cur_val)
+        proceeds_usd = cur_val - sell_comm
+        proceeds_final = proceeds_usd * rate_sell if final_azn else proceeds_usd
+        cost_final = cost_usd * rate_buy if final_azn else cost_usd
+        net = proceeds_final - cost_final
+        net_pct = (net / cost_final * 100) if cost_final else 0.0
 
-    st.markdown(f"### To NET **{target}%** (≈ **{net_amt:.0f} {unit}**)")
-    st.markdown(f"- Stock must rise **{g*100:.2f}%** (gross)")
-    st.markdown(f"- Sell target: **${target_price:.2f}**  (from ${buy_price:.2f})")
-    st.caption(f"Friction **{friction:.2f}%** = FX {fx_cost:.2f}% (counted ×{fx_legs}) + "
-               f"commission ~{c_eff*200:.2f}% (both trades). Rates {rate_buy:.4f}/{rate_sell:.4f}.")
+        st.markdown("**Exact breakdown**")
+        if cur == "AZN":
+            st.markdown(f"- Funded: {amount:.2f} AZN ÷ {rate_buy:.4f} = **${funded_usd:.2f}**")
+        else:
+            st.markdown(f"- Funded: **${funded_usd:.2f}**")
+        st.markdown(f"- Shares: **{shares:.6f}** @ ${buy_price:.2f}  ·  buy fee **${buy_comm:.2f}**")
+        st.markdown(f"- Current value: {shares:.6f} × ${sell_price:.2f} = **${cur_val:.2f}**  "
+                    f"_(broker shows this — unrealized)_")
+        line = f"- Sell fee **${sell_comm:.2f}** → proceeds **${proceeds_usd:.2f}**"
+        if final_azn:
+            line += f" × {rate_sell:.4f} = **{proceeds_final:.2f} AZN**"
+        st.markdown(line)
+        color = "var(--up)" if net >= 0 else "var(--down)"
+        st.markdown(f"### Net if you sell now: "
+                    f"<span style='color:{color}'>{net:+.2f} {fcur}</span> ({net_pct:+.2f}%)",
+                    unsafe_allow_html=True)
+        st.caption(f"Cost incl. buy fee: {cost_final:.2f} {fcur}. The gap between the broker's "
+                   f"${cur_val:.2f} and your real net is the sell fee"
+                   + (" + the USD→AZN conversion." if final_azn else "."))
 
-    st.divider()
-    st.markdown("**↩︎ Reverse — what did I ACTUALLY net?**")
-    sell_price = st.number_input("Actual sell price ($)", min_value=0.0, value=210.0, step=1.0)
-    if sell_price > 0 and buy_price > 0:
-        g_act = sell_price / buy_price - 1
-        net_frac = fx_factor * (1 - c_eff) ** 2 * (1 + g_act) - 1
-        net_amt2 = amount_azn * net_frac
-        color = "var(--up)" if net_frac >= 0 else "var(--down)"
-        st.markdown(
-            f"Stock moved **{g_act*100:.2f}%** → you NET "
-            f"<span style='color:{color};font-weight:700'>{net_frac*100:.2f}%</span> "
-            f"(≈ **{net_amt2:+.0f} {unit}**)", unsafe_allow_html=True)
-        st.caption(f"FX counted ×{fx_legs}. Commission ~{c_eff*100:.2f}%/trade "
-                   f"(min ${comm_min:.0f} / max ${comm_max:.0f}).")
-        if net_frac < 0:
-            st.warning("Net negative — costs swallowed the move.")
+        st.divider()
+        st.markdown("**🎯 Target — to NET a chosen %, sell at:**")
+        tgt = st.select_slider("Target net %", options=[1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20], value=3)
+        denom = shares * (1 - comm_pct) * (rate_sell if final_azn else 1.0)
+        if denom > 0:
+            need_sell = cost_final * (1 + tgt / 100) / denom
+            st.markdown(f"Sell at **${need_sell:.2f}** → net **{tgt}%** "
+                        f"(≈ **{cost_final*tgt/100:+.2f} {fcur}**), "
+                        f"a **{(need_sell/buy_price-1)*100:.2f}%** move from ${buy_price:.2f}.")
 
 
 # ------------------------- tab 2: ticker -------------------------------------
