@@ -397,6 +397,9 @@ with tab_calc:
     amount = c1.number_input(f"Amount invested ({cur})", min_value=0.0, value=300.0, step=10.0)
     buy_price = c2.number_input("Buy price / share ($)", min_value=0.01, value=941.98, step=1.0)
     sell_price = st.number_input("Current / sell price ($)", min_value=0.0, value=987.0, step=1.0)
+    manual_shares = st.number_input("Exact shares you own (0 = auto-calc from amount)",
+                                    min_value=0.0, value=0.0, step=0.000001, format="%.6f",
+                                    help="Type the share count from your broker to match it exactly.")
 
     with st.expander("⚙️ Rates, commission & options"):
         rate_buy = st.number_input("AZN→USD (buying $)", value=1.7190, step=0.0001, format="%.4f")
@@ -419,10 +422,11 @@ with tab_calc:
     final_azn = (cur == "AZN") or cash_out
     fcur = "AZN" if final_azn else "USD"
 
-    if buy_price > 0 and funded_usd > 0 and sell_price > 0:
-        buy_comm = comm_usd(funded_usd)
-        shares = funded_usd / buy_price
-        cost_usd = funded_usd + buy_comm
+    if buy_price > 0 and sell_price > 0 and (funded_usd > 0 or manual_shares > 0):
+        shares = manual_shares if manual_shares > 0 else funded_usd / buy_price
+        invested = shares * buy_price                       # USD spent on the shares
+        buy_comm = comm_usd(invested)
+        cost_usd = invested + buy_comm
         cur_val = shares * sell_price                       # unrealized — broker shows this
         sell_comm = comm_usd(cur_val)
         proceeds_usd = cur_val - sell_comm
@@ -432,11 +436,11 @@ with tab_calc:
         net_pct = (net / cost_final * 100) if cost_final else 0.0
 
         st.markdown("**Exact breakdown**")
-        if cur == "AZN":
+        src = "you entered" if manual_shares > 0 else "auto"
+        if cur == "AZN" and manual_shares == 0:
             st.markdown(f"- Funded: {amount:.2f} AZN ÷ {rate_buy:.4f} = **${funded_usd:.2f}**")
-        else:
-            st.markdown(f"- Funded: **${funded_usd:.2f}**")
-        st.markdown(f"- Shares: **{shares:.6f}** @ ${buy_price:.2f}  ·  buy fee **${buy_comm:.2f}**")
+        st.markdown(f"- Shares: **{shares:.6f}** ({src}) @ ${buy_price:.2f} = "
+                    f"**${invested:.2f}** in shares  ·  buy fee **${buy_comm:.2f}**")
         st.markdown(f"- Current value: {shares:.6f} × ${sell_price:.2f} = **${cur_val:.2f}**  "
                     f"_(broker shows this — unrealized)_")
         line = f"- Sell fee **${sell_comm:.2f}** → proceeds **${proceeds_usd:.2f}**"
