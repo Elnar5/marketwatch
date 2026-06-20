@@ -196,3 +196,43 @@ In short prose:
         config=types.GenerateContentConfig(system_instruction=SINGLE_INSTRUCTION),
     )
     return response.text
+
+
+def analyze_drop(api_key: str, ticker: str, pct: float,
+                 headlines: list[str], model_name: str = "gemini-2.5-flash") -> str:
+    """Why a stock dropped + an HONEST smart score and recovery read (dip-buy aid)."""
+    client = genai.Client(api_key=api_key)
+    hl = "\n".join(f"- {h}" for h in headlines[:15]) or "(no recent headlines found)"
+    move = f"down {abs(pct):.1f}%" if pct < 0 else f"up {pct:.1f}%"
+    prompt = f"""{ticker} is {move} versus its previous close today.
+Recent headlines for it:
+{hl}
+
+Respond in short, clear prose with these sections (use the headlines; if a thing is
+unclear from them, say so honestly — do not invent specifics):
+
+WHY IT DROPPED — the most likely reason(s) for the move.
+
+STOCK-SPECIFIC vs BROAD — is this mostly about THIS company (earnings miss, guidance
+cut, lawsuit, downgrade) or a SECTOR / MACRO move (rates, oil, whole market red)?
+This matters: company-specific damage can persist; broad selloffs often recover with
+the market.
+
+RECOVERY READ — three rough scenarios with rough probabilities that sum to ~100%:
+  • bounce-back soon  • drifts / range-bound  • keeps falling
+Base it on whether the cause looks temporary/overdone or like real deterioration.
+
+SMART SCORE — end with a line exactly like:
+"SMART SCORE: NN/100 — VERDICT" where VERDICT is one of AVOID / WATCH / POSSIBLE DIP.
+Higher = more attractive as a watch/dip candidate (overdone drop, intact business,
+broad not company-specific). Lower = avoid (real deterioration, falling knife).
+
+HONEST CAVEAT (one line): this is a structured opinion from public info, NOT a
+prediction or buy signal. The exact bottom is unknowable — a stock down today can keep
+falling tomorrow. Treat the score as one input, not a green light."""
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(system_instruction=SINGLE_INSTRUCTION),
+    )
+    return response.text
