@@ -165,16 +165,23 @@ st.markdown(
 
 # Settings live in the main page (not the sidebar) so they're always reachable on
 # mobile. Open by default until a key is entered, then it stays where you leave it.
+def _secret(key, default=""):
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
 with st.expander("⚙️ Settings — Gemini key, watchlist",
-                 expanded=not st.session_state.get("api_key")):
+                 expanded=not (st.session_state.get("api_key") or _secret("GEMINI_KEY"))):
     api_key = st.text_input("Gemini API key", type="password",
-                            value=st.session_state.get("api_key", ""),
+                            value=st.session_state.get("api_key", _secret("GEMINI_KEY")),
                             help="Free: aistudio.google.com/app/apikey")
     st.session_state["api_key"] = api_key
-    model_name = st.text_input("Model", value="gemini-2.5-flash")
+    model_name = st.text_input("Model", value=_secret("MODEL_NAME", "gemini-2.5-flash"))
     tickers_raw = st.text_input("Watchlist (comma-separated)", value="MU, NVDA, AVGO")
     poly_key = st.text_input("Polygon API key (for 🔬 Backtest — free: polygon.io)",
-                             type="password", value=st.session_state.get("poly_key", ""))
+                             type="password",
+                             value=st.session_state.get("poly_key", _secret("POLYGON_KEY")))
     st.session_state["poly_key"] = poly_key
     max_per_feed = st.slider("Items per source", 10, 50, 25)
     if st.button("🔄 Refresh news"):
@@ -198,6 +205,37 @@ for it in items:
         it.setdefault("impact", 0)
 if _scores:
     items.sort(key=lambda it: it.get("impact", 0), reverse=True)
+
+# ---- deep-link from the phone alert's "Analyze why" button: ?t=TICKER&d=down ----
+def _alert_ticker_headlines(tk: str) -> list[str]:
+    feeds = news_sources.ticker_feeds(tk)
+    name, url = list(feeds.items())[0]      # Google News [TICKER]
+    return [it["title"] for it in news_sources.fetch_feed(name, url, tk, 12)]
+
+_qp = st.query_params
+_qt = (_qp.get("t") or "").strip().upper()
+if _qt:
+    _qd = (_qp.get("d") or "down").strip().lower()
+    st.markdown(f"### 🔎 Alert analysis — {html.escape(_qt)}")
+    if not api_key:
+        st.warning("Add your Gemini key in ⚙️ Settings to run the smart-score analysis.")
+    else:
+        _cache = st.session_state.setdefault("alert_cache", {})
+        col1, col2 = st.columns([1, 1])
+        rerun = col2.button("↻ Re-run", key="alert_rerun")
+        if _qt not in _cache or rerun:
+            with st.spinner(f"Analyzing {_qt}…"):
+                try:
+                    heads = _alert_ticker_headlines(_qt)
+                    pct = -6.0 if _qd == "down" else 6.0   # sign only; LLM uses headlines
+                    _cache[_qt] = analysis.analyze_drop(api_key, _qt, pct, heads, model_name)
+                except Exception as exc:  # noqa: BLE001
+                    _cache[_qt] = f"Failed: {exc}"
+        st.markdown(_cache.get(_qt, ""))
+        if col1.button("✕ Clear", key="alert_clear"):
+            st.query_params.clear()
+            st.rerun()
+    st.divider()
 
 tab_feed, tab_gainers, tab_backtest, tab_calc, tab_ticker, tab_paste = st.tabs(
     ["📰 Feed", "🚀 Gainers", "🔬 Backtest", "💰 Calc", "🤖 Ticker", "📋 Paste"])
