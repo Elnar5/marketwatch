@@ -236,3 +236,59 @@ falling tomorrow. Treat the score as one input, not a green light."""
         config=types.GenerateContentConfig(system_instruction=SINGLE_INSTRUCTION),
     )
     return response.text
+
+
+def score_daily50(api_key: str, items: list[dict],
+                  model_name: str = "gemini-2.5-flash", batch_size: int = 10) -> dict:
+    """Smart-score a list of movers in batches.
+
+    items: [{ticker, name, pct, headlines:[...]}]
+    returns: {ticker: {"score": int 1-10, "reason": str, "lean": str}}
+    Score = the model's structured read of the SETUP (catalyst strength, news
+    tone, whether the move looks like it could persist vs revert). NOT a profit
+    probability. Batched ~10/call to stay within free quota.
+    """
+    import json
+    client = genai.Client(api_key=api_key)
+    out: dict = {}
+    instruction = (
+        "You are scoring stocks ONLY as a research-prioritization aid, not giving "
+        "advice or predicting returns. For each stock you get its today % move and "
+        "recent headlines. Return a JSON array; each element: "
+        '{"ticker": str, "score": int (1-10), "reason": str (<=12 words), '
+        '"lean": one of "persist"|"revert"|"unclear"}. '
+        "Higher score = the move looks better-supported by a real, durable catalyst "
+        "(earnings beat+raise, real news) and worth a closer look. Lower score = "
+        "looks like a thin pump, vague news, or an overdone spike likely to revert. "
+        "Be skeptical of huge % moves with no solid headline (often manipulation). "
+        "Output ONLY the JSON array, no prose."
+    )
+    for i in range(0, len(items), batch_size):
+        batch = items[i:i + batch_size]
+        lines = []
+        for it in batch:
+            hl = "; ".join(it.get("headlines", [])[:4]) or "(no headlines found)"
+            lines.append(f'{it["ticker"]} ({it["name"]}) move {it["pct"]:+.1f}% | news: {hl}')
+        prompt = "Score these:\n" + "\n".join(lines)
+        try:
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=instruction,
+                    response_mime_type="application/json"),
+            )
+            for row in json.loads(resp.text):
+                tk = str(row.get("ticker", "")).upper()
+                if tk:
+                    out[tk] = {
+                        "score": int(row.get("score", 0) or 0),
+                        "reason": str(row.get("reason", "")),
+                        "lean": str(row.get("lean", "unclear")),
+                    }
+        except Exception as exc:  # noqa: BLE001
+            print(f"[score batch {i} failed] {exc}")
+            for it in batch:
+                out.setdefault(it["ticker"].upper(),
+                               {"score": 0, "reason": "scoring failed", "lean": "unclear"})
+    return out
