@@ -124,3 +124,39 @@ def ticker_news(api_key: str, ticker: str, date_str: str,
         if t:
             out.append(f"[{(a.get('published_utc') or '')[:10]}] {t}")
     return out
+
+
+def grouped_daily_cv(api_key: str, date: str) -> dict:
+    """Return {ticker: (close, volume)} for every US stock on `date`."""
+    url = f"{BASE}/v2/aggs/grouped/locale/us/market/stocks/{date}"
+    r = requests.get(url, params={"adjusted": "true", "apiKey": api_key}, timeout=25)
+    if r.status_code == 429:
+        raise RuntimeError("Polygon rate limit (5/min on free tier) — slow down.")
+    r.raise_for_status()
+    out = {}
+    for row in (r.json().get("results") or []):
+        t, c, v = row.get("T"), row.get("c"), row.get("v")
+        if t and c:
+            out[t] = (float(c), float(v or 0))
+    return out
+
+
+def fetch_range_cv(api_key: str, dates: list, pace_seconds: float = 12.5) -> dict:
+    """{date: {ticker: (close, volume)}} for each date, paced for the free tier."""
+    data = {}
+    for i, d in enumerate(dates):
+        try:
+            g = grouped_daily_cv(api_key, d)
+        except RuntimeError:
+            time.sleep(pace_seconds * 2)
+            try:
+                g = grouped_daily_cv(api_key, d)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] skip {d}: {exc}"); g = {}
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] skip {d}: {exc}"); g = {}
+        if g:
+            data[d] = g
+        if i < len(dates) - 1:
+            time.sleep(pace_seconds)
+    return data
