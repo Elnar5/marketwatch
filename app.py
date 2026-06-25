@@ -13,6 +13,7 @@ import streamlit as st
 import news_sources
 import analysis
 import gainers
+import daily50
 import polygon_data
 
 
@@ -129,6 +130,76 @@ def load_gainers(count: int):
     return gainers.fetch_gainers(count)
 
 
+def _enrich_and_score(universe, api_key, model):
+    """Attach recent headlines (threaded) + LLM smart score to each item."""
+    from concurrent.futures import ThreadPoolExecutor
+    if not universe:
+        return universe
+
+    def heads(tk):
+        try:
+            feeds = news_sources.ticker_feeds(tk)
+            name, url = list(feeds.items())[0]
+            return [it["title"] for it in news_sources.fetch_feed(name, url, tk, 4)]
+        except Exception:  # noqa: BLE001
+            return []
+
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        hl_list = list(ex.map(heads, [u["ticker"] for u in universe]))
+    for u, h in zip(universe, hl_list):
+        u["headlines"] = h
+
+    if api_key:
+        scores = analysis.score_daily50(api_key, universe, model_name=model)
+        for u in universe:
+            s = scores.get(u["ticker"].upper(), {})
+            u["score"] = s.get("score", 0)
+            u["reason"] = s.get("reason", "")
+            u["lean"] = s.get("lean", "")
+    else:
+        for u in universe:
+            u["score"], u["reason"], u["lean"] = 0, "add Gemini key to score", ""
+    return universe
+
+
+def setup_calendar(n_weekdays: int) -> list[str]:
+    """Last n weekdays ending yesterday (Polygon free tier forbids today)."""
+    out, cur = [], date.today() - timedelta(days=1)
+    while len(out) < n_weekdays:
+        if cur.weekday() < 5:
+            out.append(cur.isoformat())
+        cur -= timedelta(days=1)
+    return list(reversed(out))
+
+
+@st.cache_data(show_spinner=False)
+def build_daily50(day_key: str, api_key: str, model: str, top_n: int):
+    """MOVERS screen — today's biggest movers + most active (computed once/day)."""
+    universe = daily50.build_universe(top_n=top_n)
+    return _enrich_and_score(universe, api_key, model)
+
+
+@st.cache_data(show_spinner=False)
+def build_setup50(day_key: str, poly_key: str, api_key: str, model: str,
+                  top_n: int, min_price: float, min_dvol_m: float,
+                  ma_window: int = 20, mom_window: int = 10):
+    """Whole-MARKET setup scan (no fixed ticker list); junk removed by liquidity.
+    Returns None if no Polygon key; [] if data unavailable."""
+    if not poly_key:
+        return None
+    dates = setup_calendar(ma_window + 12)
+    data = polygon_data.fetch_range_cv(poly_key, dates, pace_seconds=12.5)
+    if not data:
+        return []
+    ranked = daily50.compute_setups_market(
+        data, min_price=min_price, min_dollar_vol=min_dvol_m * 1e6,
+        ma_window=ma_window, mom_window=mom_window, top_n=top_n)
+    for u in ranked:
+        u["name"] = u["ticker"]
+        u["pct"] = u.get("mom", 0)
+    return _enrich_and_score(ranked, api_key, model)
+
+
 @st.cache_data(show_spinner=False)
 def bt_fetch(poly_key: str, dates: tuple, pace: float = 12.5):
     return polygon_data.fetch_range(poly_key, list(dates), pace_seconds=pace)
@@ -237,8 +308,8 @@ if _qt:
             st.rerun()
     st.divider()
 
-tab_feed, tab_gainers, tab_backtest, tab_calc, tab_ticker, tab_paste = st.tabs(
-    ["📰 Feed", "🚀 Gainers", "🔬 Backtest", "💰 Calc", "🤖 Ticker", "📋 Paste"])
+tab_feed, tab_daily50, tab_gainers, tab_backtest, tab_calc, tab_ticker, tab_paste = st.tabs(
+    ["📰 Feed", "🎯 Daily 50", "🚀 Gainers", "🔬 Backtest", "💰 Calc", "🤖 Ticker", "📋 Paste"])
 
 
 # ------------------------- tab 1: feed ---------------------------------------
@@ -311,6 +382,116 @@ with tab_feed:
 
 
 # ------------------------- tab: gainers --------------------------------------
+with tab_daily50:
+    mode = st.radio("Screen", ["🌱 Setup (building uptrend — forward)",
+                               "🔥 Movers (today's biggest moves)"],
+                    key="d50_mode", horizontal=True)
+    today_key = date.today().isoformat()
+    is_setup = mode.startswith("🌱")
+
+    if is_setup:
+        st.caption("Stocks in a CONFIRMED, building uptrend (above their moving average, "
+                   "momentum rising but not blown-off) — names 'on the way up', surfaced "
+                   "BEFORE a big spike. A research funnel, NOT a prediction; many won't "
+                   "work out. Smart Score adds the model's news read.")
+    else:
+        st.caption("Today's biggest movers + most active. These ALREADY moved — chasing "
+                   "is high-risk. An attention screen, not a buy list.")
+
+    cols = st.columns([1, 1])
+    if cols[0].button("↻ Rebuild now", key="d50_rebuild"):
+        build_daily50.clear(); build_setup50.clear()
+    sort_by = cols[1].selectbox(
+        "Sort by", (["Setup score", "Smart Score", "Momentum"] if is_setup
+                    else ["Smart Score", "Abs % move", "Volume"]), key="d50_sort")
+
+    if is_setup:
+        sc = st.columns([1, 1])
+        min_price = sc[0].slider("Min price $", 1, 50, 5, key="d50_minp")
+        min_dvol_m = sc[1].slider("Min avg $ volume (millions/day)", 1, 200, 20, 1,
+                                  key="d50_dvol")
+
+    if is_setup and not poly_key:
+        st.warning("Add your Polygon key in ⚙️ Settings — the Setup screen needs price "
+                   "history. (Get a free key at polygon.io.)")
+        d50 = []
+    else:
+        spin = ("Building today's Setup screen — first open of the day is slow "
+                "(~5-6 min, Polygon free-tier pacing), then instant all day."
+                if is_setup else "Building today's movers…")
+        with st.spinner(spin):
+            d50 = (build_setup50(today_key, poly_key, api_key, model_name, 50,
+                                 float(min_price), float(min_dvol_m))
+                   if is_setup else build_daily50(today_key, api_key, model_name, 50))
+        d50 = d50 or []
+
+    if not d50 and (poly_key or not is_setup):
+        st.warning("Couldn't build the screen right now — data source may be blocking the "
+                   "server, or it's a non-trading day. Tell Claude if it persists.")
+    elif d50:
+        if sort_by in ("Setup score",):
+            d50 = sorted(d50, key=lambda x: x.get("setup", 0), reverse=True)
+        elif sort_by == "Smart Score":
+            d50 = sorted(d50, key=lambda x: x.get("score", 0), reverse=True)
+        elif sort_by == "Volume":
+            d50 = sorted(d50, key=lambda x: x.get("volume", 0), reverse=True)
+        elif sort_by == "Momentum":
+            d50 = sorted(d50, key=lambda x: x.get("mom", 0), reverse=True)
+        else:
+            d50 = sorted(d50, key=lambda x: abs(x.get("pct", 0)), reverse=True)
+
+        if not api_key:
+            st.info("Add your Gemini key in ⚙️ Settings to fill the Smart Score column.")
+
+        import pandas as pd
+        lean_icon = {"persist": "🟢", "revert": "🔴", "unclear": "⚪"}
+        if is_setup:
+            df = pd.DataFrame([{
+                "Setup": u.get("setup", 0), "Score": u.get("score", 0),
+                "Ticker": u["ticker"], "Price": round(u.get("price", 0), 2),
+                "vs MA%": u.get("above_ma", 0), "Mom%": u.get("mom", 0),
+                "Off-high%": u.get("off_high", 0),
+                "$vol(M)": u.get("dollar_vol_m", 0),
+                "Lean": lean_icon.get(u.get("lean", ""), ""),
+                "Why (model)": u.get("reason", ""),
+                "Chart": f"https://finance.yahoo.com/quote/{u['ticker']}",
+            } for u in d50])
+            colcfg = {
+                "Setup": st.column_config.NumberColumn("Setup", help="0-100 trend/momentum setup", width="small"),
+                "Score": st.column_config.NumberColumn("Score", help="1-10 model news read", width="small"),
+                "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                "vs MA%": st.column_config.NumberColumn("vs MA%", format="%.1f%%", help="% above moving average"),
+                "Mom%": st.column_config.NumberColumn("Mom%", format="%.1f%%"),
+                "Off-high%": st.column_config.NumberColumn("Off-high%", format="%.1f%%", help="distance from recent high"),
+                "$vol(M)": st.column_config.NumberColumn("$vol(M)", format="$%.0fM", help="avg daily dollar volume"),
+                "Chart": st.column_config.LinkColumn("Chart", display_text="📈"),
+            }
+        else:
+            df = pd.DataFrame([{
+                "Score": u.get("score", 0), "Ticker": u["ticker"],
+                "Company": u["name"][:26], "% move": round(u.get("pct", 0), 1),
+                "Price": round(u.get("price", 0), 2),
+                "Lean": lean_icon.get(u.get("lean", ""), ""),
+                "Why (model)": u.get("reason", ""),
+                "Chart": f"https://finance.yahoo.com/quote/{u['ticker']}",
+            } for u in d50])
+            colcfg = {
+                "Score": st.column_config.NumberColumn("Score", help="1-10 model news read", width="small"),
+                "% move": st.column_config.NumberColumn("% move", format="%.1f%%"),
+                "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                "Chart": st.column_config.LinkColumn("Chart", display_text="📈"),
+            }
+        st.dataframe(df, hide_index=True, use_container_width=True, height=600,
+                     column_config=colcfg)
+        if is_setup:
+            st.caption("Setup 0-100: in uptrend (+40), momentum (capped, blow-offs "
+                       "penalized), room above MA, near breakout. High Setup + high Smart "
+                       "Score = building trend WITH a real catalyst. Tap 📈 for the chart. "
+                       "Your own research before acting.")
+        else:
+            st.caption("Tap 📈 for the chart. Do your own research before acting.")
+
+
 with tab_gainers:
     st.caption("Today's biggest gainers across the US market. ⚠️ Chasing these is "
                "high-risk — most extreme daily gainers pull back. Read each one first.")
